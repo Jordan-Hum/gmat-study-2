@@ -342,3 +342,4 @@ select.dd.wrong { border-color: var(--bad); background: var(--bad-soft); }
 .score-sm { font-size: 26px; font-weight: 800; text-align: right; line-height: 1; }
 .score-sm small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
 optgroup { font-weight: 700; }
+.slow { color: var(--bad); font-weight: 700; }

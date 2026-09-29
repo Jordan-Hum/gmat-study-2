@@ -67,9 +67,15 @@
     if (sync && !quiet) scheduleSync();
   }
 
-  function record(qid, correct) {
+  // Per question: attempts, correct, last result, time of last attempt, total seconds,
+  // and a short history of recent attempts ([time, right?, seconds]) for the Stats page.
+  const HISTORY = 10;
+  function record(qid, correct, secs) {
     const r = S.q[qid] || { a: 0, c: 0, last: 0 };
-    r.a++; if (correct) r.c++; r.last = correct ? 1 : 0; r.ts = Date.now();
+    const now = Date.now(), t = Math.round(secs || 0);
+    r.a++; if (correct) r.c++; r.last = correct ? 1 : 0; r.ts = now;
+    r.t = (r.t || 0) + t;
+    r.h = (r.h || []).concat([[now, correct ? 1 : 0, t]]).slice(-HISTORY);
     S.q[qid] = r;
   }
 
@@ -286,6 +292,7 @@
         <button class="btn primary" id="go-daily">⚡ Quick 20: weakest areas</button>
         <a class="btn accent" href="#/exam">⏱️ Mock exam</a>
         <button class="btn" id="go-missed" ${all.missed ? "" : "disabled"}>🔁 Redo ${all.missed} missed</button>
+        <a class="btn" href="#/stats">📊 Stats & what to practise</a>
       </div>
 
       ${studyPlan(dl)}
@@ -532,7 +539,7 @@
           const x = cx(i) - band * 0.36 + bw * si;
           const top = y(Math.max(v, 0)), h = Math.abs(y(v) - y(0));
           g += `<rect class="br s${si}" x="${x}" y="${top}" width="${bw - 2}" height="${h}" rx="2"/>`;
-          if (c.labels) g += `<text class="val" x="${x + (bw - 2) / 2}" y="${top - 5}" text-anchor="middle">${fmtNum(v)}</text>`;
+          if (c.labels && v !== 0) g += `<text class="val" x="${x + (bw - 2) / 2}" y="${top - 5}" text-anchor="middle">${fmtNum(v)}</text>`;
         });
       }
     });
@@ -705,7 +712,7 @@
         <button class="btn small" id="quit">End</button>
       </div>
       <div class="card">
-        <div class="row"><span class="tag">${TOPIC[q.topic].icon} ${esc(TOPIC[q.topic].name)} · ${KIND_LABEL[q.kind]}</span></div>
+        <div class="row"><span class="tag">${TOPIC[q.topic].icon} ${esc(TOPIC[q.topic].name)}${TOPIC[q.topic].name === KIND_LABEL[q.kind] ? "" : " · " + KIND_LABEL[q.kind]}</span></div>
         ${questionHTML(q, it, { reveal: rev, lock: rev })}
         <div class="row mt">
           <button class="btn" id="prev" ${ss.idx === 0 ? "disabled" : ""}>← Back</button>
@@ -721,7 +728,7 @@
     viewing = { ss, idx: ss.idx, since: Date.now() };
 
     const go = i => { accrue(); ss.idx = i; save(); views.quiz(); window.scrollTo(0, 0); };
-    const commit = () => { accrue(); it.checked = true; record(it.id, isRight(q, it.chosen)); save(); views.quiz(); };
+    const commit = () => { accrue(); it.checked = true; record(it.id, isRight(q, it.chosen), it.t); save(); views.quiz(); };
     wireAnswers(q, it, rev, () => {
       if (q.fmt === "mc") commit();
       else { save(true); const c = document.getElementById("check"); if (c) c.disabled = !isComplete(q, it.chosen); }
@@ -935,7 +942,7 @@
     ss.secs_total = Math.round((Date.now() - ss.started) / 1000);
     if (ss.mode === "exam") {
       if (ss.phase !== "gap" && !curSec(ss).secs) curSec(ss).secs = Math.min(curSec(ss).dur, Math.round((Date.now() - ss.secStart) / 1000));
-      ss.items.forEach(it => { if (it.chosen !== null) record(it.id, isRight(QMAP[it.id], it.chosen)); });
+      ss.items.forEach(it => { if (it.chosen !== null) record(it.id, isRight(QMAP[it.id], it.chosen), it.t); });
       const bySec = {};
       let score = 0, time = 0;
       for (const sec of ss.secs) {
@@ -1254,17 +1261,17 @@
     return null;
   }
 
-  // Compact file format ({id: [attempts, correct, lastRight, time]}) keeps saves small enough to finish
+  // Compact file format ({id: [attempts, correct, lastRight, time, seconds, history]}) keeps saves small enough to finish
   // even as the tab closes (browsers cap those at 64 KB).
   function packProgress(d) {
     const q = {};
-    for (const [id, r] of Object.entries(d.q || {})) q[id] = [r.a || 0, r.c || 0, r.last ? 1 : 0, r.ts || 0];
+    for (const [id, r] of Object.entries(d.q || {})) q[id] = [r.a || 0, r.c || 0, r.last ? 1 : 0, r.ts || 0, r.t || 0, r.h || []];
     return { v: 2, saved: Date.now(), q, exams: d.exams || [], cards: d.cards || {}, date: d.date || "", target: d.target };
   }
   function unpackProgress(d) {
     if (!d || d.v !== 2) return d;
     const q = {};
-    for (const [id, r] of Object.entries(d.q || {})) q[id] = { a: r[0], c: r[1], last: r[2], ts: r[3] };
+    for (const [id, r] of Object.entries(d.q || {})) q[id] = { a: r[0], c: r[1], last: r[2], ts: r[3], t: r[4] || 0, h: r[5] || [] };
     return Object.assign({}, d, { q });
   }
 
@@ -1570,6 +1577,179 @@
       catch (e) { say("cloud-msg", false, esc(e.message)); btn.disabled = false; }
     };
   }
+
+  // ----- Stats & analytics -----
+  // Everything here is computed from S.q (per-question results with recent history) and S.exams,
+  // so it's the same on every device once sync has merged the progress.
+  function attempts(filter) {
+    const out = [];
+    for (const q of QUESTIONS) {
+      if (filter && !filter(q)) continue;
+      const r = S.q[q.id];
+      if (r && r.h) r.h.forEach(h => out.push({ q, ts: h[0], ok: h[1], secs: h[2] }));
+    }
+    return out.sort((a, b) => a.ts - b.ts);
+  }
+  function groupStats(qs) {
+    let seen = 0, right = 0, att = 0, ok = 0, secs = 0, timed = 0;
+    for (const q of qs) {
+      const r = S.q[q.id];
+      if (!r) continue;
+      seen++; if (r.last) right++;
+      att += r.a; ok += r.c;
+      if (r.t && r.a) { secs += r.t; timed += r.a; }
+    }
+    return { total: qs.length, seen, right, acc: pct(right, seen), att, allAcc: pct(ok, att), avg: timed ? secs / timed : 0, cover: pct(seen, qs.length) };
+  }
+  // Recent accuracy: the last n attempts in a group (falls back to last results if there's no history).
+  function recentAcc(filter, n) {
+    const a = attempts(filter).slice(-n);
+    if (a.length >= 5) return { acc: a.filter(x => x.ok).length / a.length, n: a.length };
+    const g = groupStats(QUESTIONS.filter(filter));
+    return { acc: g.seen ? g.right / g.seen : 0, n: g.seen };
+  }
+  const dayKey = ts => { const d = new Date(ts); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+
+  views.stats = function () {
+    const all = attempts();
+    const g = groupStats(QUESTIONS);
+    const days = new Set(all.map(a => dayKey(a.ts)));
+    // Consecutive days with answers, counting back from today (or yesterday, if nothing yet today)
+    let streak = 0;
+    const d = new Date();
+    if (!days.has(dayKey(d))) d.setDate(d.getDate() - 1);
+    while (days.has(dayKey(d))) { streak++; d.setDate(d.getDate() - 1); }
+    const week = all.filter(a => a.ts > Date.now() - 7 * 86400000);
+    const totalSecs = all.reduce((s, a) => s + a.secs, 0);
+
+    // Estimated score from recent accuracy in each section
+    const secEst = SECTIONS.map(sec => { const r = recentAcc(q => q.sec === sec.id, 40); return { sec, ...r, est: r.n ? sectionScore(r.acc) : null }; });
+    const estTotal = secEst.every(x => x.n >= 10) ? totalScore(secEst[0].est, secEst[1].est, secEst[2].est) : null;
+
+    // Topic priority: exam weight × room to improve, pushed up by low coverage and slow pace
+    const topics = TOPICS.map(t => {
+      const st = groupStats(QUESTIONS.filter(q => q.topic === t.id));
+      const rec = recentAcc(q => q.topic === t.id, 15);
+      const weight = SECTION[t.sec].mix[t.id] / SECTION[t.sec].n;
+      const pace = st.avg ? st.avg / targetSecs(t.sec) : 0;
+      const acc = st.seen ? rec.acc : 0.5;
+      const priority = weight * (1 - acc) * (st.seen < 5 ? 1.5 : 1) * (pace > 1.3 ? 1.2 : 1);
+      return { t, st, rec, pace, priority };
+    });
+    const focus = topics.slice().sort((a, b) => b.priority - a.priority).slice(0, 3);
+    const sortKey = views.stats.sort || "priority";
+    const sorters = {
+      priority: (a, b) => b.priority - a.priority,
+      acc: (a, b) => (a.st.seen ? a.rec.acc : 2) - (b.st.seen ? b.rec.acc : 2),
+      time: (a, b) => b.pace - a.pace,
+      cover: (a, b) => a.st.cover - b.st.cover
+    };
+    const rows = topics.slice().sort(sorters[sortKey]);
+
+    // Question types
+    const kinds = Object.keys(KIND_LABEL).map(k => {
+      const qs = QUESTIONS.filter(q => q.kind === k);
+      const st = groupStats(qs);
+      return { k, st, target: targetSecs(qs[0] ? qs[0].sec : "Q") };
+    }).filter(x => x.st.total);
+
+    // Pacing: how accuracy changes when you run long
+    const timed = all.filter(a => a.secs > 0);
+    const slow = timed.filter(a => a.secs > targetSecs(a.q.sec) * 1.5), fast = timed.filter(a => a.secs <= targetSecs(a.q.sec) * 1.5);
+
+    // Last 14 days of activity, and weekly accuracy for the last 8 weeks
+    const dayLabels = [], dayCounts = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const k = dayKey(d);
+      dayLabels.push(i === 0 ? "Today" : d.toLocaleDateString(undefined, { month: "numeric", day: "numeric" }));
+      dayCounts.push(all.filter(a => dayKey(a.ts) === k).length);
+    }
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+      const end = Date.now() - i * 7 * 86400000, start = end - 7 * 86400000;
+      const w = all.filter(a => a.ts > start && a.ts <= end);
+      if (w.length) weeks.push({ label: i === 0 ? "This wk" : i + " wk ago", secs: SECTIONS.map(s => { const x = w.filter(a => a.q.sec === s.id); return x.length ? pct(x.filter(a => a.ok).length, x.length) : null; }), acc: pct(w.filter(a => a.ok).length, w.length) });
+    }
+    const mocks = S.exams.filter(e => e.est && e.est.total).slice(-10);
+
+    const barW = p => `<div class="bar"><i class="${barClass(p)}" style="width:${p}%"></i></div>`;
+    const paceCell = (avg, target) => avg ? `<span class="${avg > target * 1.3 ? "slow" : ""}">${fmtTime(avg)}</span> <span class="tag">/ ${fmtTime(target)}</span>` : `<span class="muted">—</span>`;
+
+    $app.innerHTML = `
+      <h1>Stats</h1>
+      <p class="sub">Where you stand and what to practise next. Built from every answer you've saved${sync ? ", synced across your devices" : ` on this device (<a href="#/backup">turn on sync</a> to combine devices)`}.</p>
+
+      <div class="grid grid-4">
+        <div class="card stat"><b>${estTotal || "—"}</b><span>${estTotal ? "Estimated score from recent practice" : "Estimated score (answer 10+ per section)"}</span></div>
+        <div class="card stat"><b>${g.seen}/${g.total}</b><span>Questions attempted (${g.cover}%)</span></div>
+        <div class="card stat"><b>${g.seen ? g.acc + "%" : "—"}</b><span>Accuracy (latest try per question)</span></div>
+        <div class="card stat"><b>${streak}</b><span>Day streak · ${week.length} answers this week · ${Math.round(totalSecs / 3600 * 10) / 10} h total</span></div>
+      </div>
+
+      <h2>🎯 Practise next</h2>
+      <div class="grid grid-3">
+        ${focus.map(({ t, st, rec, pace }) => `<div class="card">
+          <b>${t.icon} ${esc(t.name)}</b>
+          <p class="muted" style="margin:4px 0 10px;font-size:14px">${!st.seen ? "Not started yet." : `${Math.round(rec.acc * 100)}% recently · ${st.cover}% of bank seen${pace > 1.3 ? " · running slow" : ""}`} ${SECTION[t.sec].mix[t.id]} of ${SECTION[t.sec].n} ${esc(SECTION[t.sec].short)} questions on a mock.</p>
+          <div class="row"><button class="btn primary small" data-go-topic="${t.id}">Practise 15</button><a class="btn small" href="#/notes/${t.id}">Notes</a></div>
+        </div>`).join("")}
+      </div>
+
+      <h2>By section</h2>
+      <div class="card notes"><table>
+        <tr><th>Section</th><th>Attempted</th><th>Accuracy</th><th>Recent (last 40)</th><th>Avg time / pace</th><th>Est. score</th></tr>
+        ${secEst.map(({ sec, acc, n, est }) => {
+          const st = groupStats(QUESTIONS.filter(q => q.sec === sec.id));
+          return `<tr><td>${sec.icon} ${esc(sec.name)}</td><td>${st.seen}/${st.total}</td><td>${st.seen ? st.acc + "%" + barW(st.acc) : "—"}</td>
+            <td>${n ? Math.round(acc * 100) + "%" : "—"}</td><td>${paceCell(st.avg, targetSecs(sec.id))}</td><td><b>${est && n >= 10 ? est : "—"}</b></td></tr>`;
+        }).join("")}
+      </table></div>
+
+      <div class="row" style="margin-top:28px"><h2 style="margin:0">By topic</h2><span class="spacer"></span>
+        <span class="tag">Sort:</span>
+        ${[["priority", "Priority"], ["acc", "Weakest"], ["time", "Slowest"], ["cover", "Least covered"]].map(([k, l]) => `<label class="chip ${k === sortKey ? "on" : ""}" data-sort="${k}">${l}</label>`).join("")}
+      </div>
+      <div class="card notes mt"><table>
+        <tr><th>Topic</th><th>Seen</th><th>Accuracy</th><th>Recent</th><th>Avg time / pace</th><th></th></tr>
+        ${rows.map(({ t, st, rec, pace }) => `<tr>
+          <td>${t.icon} <a href="#/notes/${t.id}">${esc(t.name)}</a><br><span class="tag">${esc(SECTION[t.sec].short)}</span></td>
+          <td>${st.seen}/${st.total}<div class="bar"><i style="width:${st.cover}%"></i></div></td>
+          <td>${st.seen ? st.acc + "%" + barW(st.acc) : "—"}</td>
+          <td>${st.seen ? Math.round(rec.acc * 100) + "%" : "—"}</td>
+          <td>${paceCell(st.avg, targetSecs(t.sec))}</td>
+          <td><button class="btn small" data-go-topic="${t.id}">Practise</button></td></tr>`).join("")}
+      </table></div>
+
+      <h2>By question type</h2>
+      <div class="card notes"><table>
+        <tr><th>Type</th><th>Seen</th><th>Accuracy</th><th>Avg time / pace</th></tr>
+        ${kinds.map(({ k, st, target }) => `<tr><td>${KIND_LABEL[k]}</td><td>${st.seen}/${st.total}</td><td>${st.seen ? st.acc + "%" + barW(st.acc) : "—"}</td><td>${paceCell(st.avg, target)}</td></tr>`).join("")}
+      </table></div>
+
+      <h2>Pacing</h2>
+      <div class="grid grid-2">
+        <div class="card stat"><b>${fast.length ? pct(fast.filter(a => a.ok).length, fast.length) + "%" : "—"}</b><span>Accuracy when on pace (${fast.length} answers)</span></div>
+        <div class="card stat"><b>${slow.length ? pct(slow.filter(a => a.ok).length, slow.length) + "%" : "—"}</b><span>Accuracy when over 1.5× pace (${slow.length} answers)${slow.length >= 5 && fast.length && pct(slow.filter(a => a.ok).length, slow.length) < pct(fast.filter(a => a.ok).length, fast.length) - 10 ? ". Extra time isn't paying off: guess and move on sooner." : ""}</span></div>
+      </div>
+
+      <h2>Activity</h2>
+      <div class="card">${dayCounts.some(x => x) ? chartSVG({ type: "bar", title: "Questions answered per day (last 14 days)", x: dayLabels, series: [{ name: "Answers", v: dayCounts }], labels: true }) : `<div class="empty">No answers yet. Start with a Quick 20 on the home page.</div>`}</div>
+      ${weeks.length >= 2 ? `<div class="card mt">${chartSVG({ type: "line", title: "Weekly accuracy (%)", x: weeks.map(w => w.label), series: [{ name: "Overall", v: weeks.map(w => w.acc) }], labels: true, min: 0, max: 100 })}
+        <p class="tag" style="margin:6px 0 0">By section: ${weeks.map(w => `${w.label}: ${SECTIONS.map((s, i) => w.secs[i] === null ? "" : s.short + " " + w.secs[i] + "%").filter(Boolean).join(", ")}`).join(" · ")}</p></div>` : ""}
+
+      <h2>Mock exams</h2>
+      <div class="card">${mocks.length >= 2 ? chartSVG({ type: "line", title: "Estimated score by full mock", x: mocks.map((e, i) => "#" + (S.exams.indexOf(e) + 1)), series: [{ name: "Score", v: mocks.map(e => e.est.total) }, { name: "Target", v: mocks.map(() => S.target) }], labels: true, min: 205, max: 805 })
+        : mocks.length ? `<p style="margin:0">One full mock so far: <b>${mocks[0].est.total}</b>. Take another to see a trend.</p>` : `<div class="empty">No full mocks yet. <a href="#/exam">Take one</a> to get a baseline score.</div>`}</div>
+      <div class="row mt">
+        <button class="btn" id="go-missed" ${g.seen - g.right ? "" : "disabled"}>🔁 Redo ${g.seen - g.right} missed questions</button>
+        <a class="btn" href="#/backup">💾 Save & sync</a>
+      </div>`;
+    $app.querySelectorAll("[data-go-topic]").forEach(b => b.onclick = () =>
+      startPractice(pickQuestions([b.dataset.goTopic], "weak", 15), TOPIC[b.dataset.goTopic].name));
+    $app.querySelectorAll("[data-sort]").forEach(c => c.onclick = () => { views.stats.sort = c.dataset.sort; views.stats(); });
+    document.getElementById("go-missed").onclick = () => startPractice(pickQuestions(TOPICS.map(t => t.id), "missed", 999), "Review missed");
+  };
 
   views.glossary = function () {
     $app.innerHTML = `
