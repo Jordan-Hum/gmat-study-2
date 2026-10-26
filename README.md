@@ -1,6 +1,6 @@
-# 🎯 GMAT Focus Prep
+# 🎯 GMAT Focus Prep + ☁️ Salesforce FSC Prep
 
-A static study site for the **GMAT Focus Edition**, built like the CIRO Exam Prep site. It has no build step and no server; it runs on GitHub Pages.
+A static study site with two exams, switched from the header: the **GMAT Focus Edition** (`index.html`) and the **Salesforce Financial Services Cloud accreditation** (`fsc.html`). It has no build step and no server; it runs on GitHub Pages.
 
 ## Features
 - **482 practice questions** across all three sections, each with a worked explanation:
@@ -14,6 +14,17 @@ A static study site for the **GMAT Focus Edition**, built like the CIRO Exam Pre
 - **Study notes** for all 15 topics, **103 flashcards** and a searchable glossary.
 - **Automatic sync across devices**: progress (including timing and attempt history for Stats) saves to `progress.json` on the `progress` branch of this repo via the GitHub API. Set it up once on the "Save & sync" page: paste a fine-grained token (this repo only, Contents read/write) and pick a password. The token is stored in `sync.json` encrypted with that password (PBKDF2 + AES-GCM), so other devices just enter the password. Devices merge progress; the newest answer per question wins.
 - **Manual backup & restore** as a file or copy-paste code.
+
+## Salesforce FSC tab (`fsc.html`)
+For the **Agentforce Financial Services Accredited Professional** exam (formerly Financial Services Cloud Accredited Professional, AP-208).
+- **140 practice questions**, mostly consultant scenarios, across 10 topics mapped to the exam domains: Discovery (12%), Define/Design (42%) and Delivery (46%).
+- **Timed mock exams** weighted by domain (full: 55 questions in 75 minutes), plus half and quick versions, with flagging and full review.
+- **Stats**: projected score against the pass mark, accuracy and pace by domain and topic, a "practise next" list, activity and mock trends.
+- **Study notes** per topic, **73 flashcards** and a glossary.
+- **Sync** uses the same encrypted token as the GMAT tab (a device unlocked on either page works on both), saving to `progress-fsc.json` on the `progress` branch.
+- The exam format (55 questions, 75 minutes, 56% to pass) comes from published prep guides. Check the official exam guide and adjust `js/fsc/data-topics.js` if it differs.
+
+Edit FSC content in `js/fsc/`: `data-topics.js` (topics, exam format and weights), `data-questions.js`, `data-notes.js`, `data-glossary.js`.
 
 ## Hosting (GitHub Pages)
 Settings → Pages → *Deploy from a branch* → `main` / `(root)`.

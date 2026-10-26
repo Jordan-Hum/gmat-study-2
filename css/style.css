@@ -343,3 +343,21 @@ select.dd.wrong { border-color: var(--bad); background: var(--bad-soft); }
 .score-sm small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
 optgroup { font-weight: 700; }
 .slow { color: var(--bad); font-weight: 700; }
+
+/* Exam switch (GMAT / Salesforce FSC) */
+.track a {
+  padding: 5px 12px; border-radius: 999px; text-decoration: none;
+  font-weight: 700; font-size: 13px; color: var(--muted); white-space: nowrap;
+}
+.track a:hover { color: var(--text); }
+.track a.on { background: var(--accent); color: #fff; }
+.ok-txt { color: var(--good); }
+.warn-txt { color: var(--warn); }
+.bad-txt { color: var(--bad); }
+
+/* FSC page colors */
+body.fsc { --accent: #0b5cab; --accent-soft: #e3effc; }
+body.fsc .hero { background: linear-gradient(135deg, #0b5cab 0%, #032d60 100%); }
+@media (prefers-color-scheme: dark) {
+  body.fsc { --accent: #1b96ff; --accent-soft: #10284a; }
+}
