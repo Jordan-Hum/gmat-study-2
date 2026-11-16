@@ -34,6 +34,8 @@ Settings → Pages → *Deploy from a branch* → `main` / `(root)`.
 - Questions: `js/data-quant.js`, `js/data-verbal.js`, `js/data-di.js`, plus `js/data-more-*.js`. The correct answer is listed first (or given by `a` / index fields for DS and multi-part formats; see the comments at the top of `js/data-di.js`).
 - Notes: `js/data-notes.js` · Flashcards / glossary: `js/data-glossary.js`
 
+When you change a CSS or JS file, bump the `?v=` number on its link in `index.html` / `fsc.html` so browsers load the new version instead of a cached one.
+
 To run it locally, run `python3 -m http.server` and visit http://localhost:8000.
 
 Study aid only, not affiliated with GMAC. Check the current test format on mba.com.
