@@ -15,7 +15,7 @@
   for (const t of TOPICS) {
     for (const q of window.QB[t.id] || []) {
       const kind = q[3] || "r";
-      QUESTIONS.push({ id: t.id + "-" + hashId(q[0]), topic: t.id, text: q[0], opts: q[1], exp: q[2], kind });
+      QUESTIONS.push({ id: t.id + "-" + hashId(q[0]), topic: t.id, text: q[0], opts: q[1], exp: q[2], kind, k: q[4] || 1 });
     }
   }
   const QMAP = Object.fromEntries(QUESTIONS.map(q => [q.id, q]));
@@ -72,7 +72,16 @@
   const $app = document.getElementById("app");
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const pct = (n, d) => d ? Math.round(100 * n / d) : 0;
-  const LETTERS = "ABCD";
+  const LETTERS = "ABCDE";
+  // Answers: single-answer questions store the chosen option index (0 = correct).
+  // "Choose 2" questions (k = 2) store the sorted array of chosen indices; options 0..k-1 are correct.
+  const isMulti = q => q.k > 1;
+  function isRight(q, ch) {
+    if (ch === null || ch === undefined) return false;
+    if (!isMulti(q)) return ch === 0;
+    return Array.isArray(ch) && ch.length === q.k && ch.every(i => i < q.k);
+  }
+  const picked = (q, it, oi) => isMulti(q) ? (it.chosen || it.pick || []).includes(oi) : it.chosen === oi;
   function shuffle(a) {
     a = a.slice();
     for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
@@ -114,7 +123,7 @@
       duration: mode === "exam" ? (opts.seconds || qids.length * SECONDS_PER_EXAM_Q) : 0,
       title: opts.title || (mode === "exam" ? "Mock Exam" : "Practice"),
       track: S.track,
-      items: qids.map(id => ({ id, order: shuffle([0, 1, 2, 3]), chosen: null, flag: false })),
+      items: qids.map(id => ({ id, order: shuffle(QMAP[id].opts.map((_, i) => i)), chosen: null, flag: false })),
       done: false
     };
     save();
@@ -440,7 +449,7 @@
     const answered = it.chosen !== null;
     const reveal = !exam && answered;
     const nAns = ss.items.filter(x => x.chosen !== null).length;
-    const nRight = ss.items.filter(x => x.chosen === 0).length;
+    const nRight = ss.items.filter(x => isRight(QMAP[x.id], x.chosen)).length;
 
     $app.innerHTML = `
       <div class="quiz-top">
@@ -453,24 +462,26 @@
       <div class="card">
         <div class="row"><span class="tag">${TOPIC[q.topic].icon} ${esc(TOPIC[q.topic].name)} · ${KIND_LABEL[q.kind]}</span><span class="spacer"></span>
           ${exam ? `<button class="btn small" id="flag">${it.flag ? "🚩 Flagged" : "⚑ Flag"}</button>` : ""}</div>
-        <div class="q-text">${esc(q.text)}</div>
-        <div id="opts">
+        <div class="q-text">${esc(q.text)}${isMulti(q) ? ` <span class="choose">Choose ${q.k} answers.</span>` : ""}</div>
+        <div id="opts" class="${isMulti(q) ? "multi" : ""}">
           ${it.order.map((oi, pos) => {
             let cls = "";
-            if (reveal) { if (oi === 0) cls = "right"; else if (oi === it.chosen) cls = "wrong"; }
-            else if (it.chosen === oi) cls = "sel";
+            const sel = picked(q, it, oi);
+            if (reveal) { if (oi < q.k) cls = "right"; else if (sel) cls = "wrong"; }
+            else if (sel) cls = "sel";
             return `<button class="opt ${cls}" data-o="${oi}" ${reveal ? "disabled" : ""}><span class="k">${LETTERS[pos]}</span><span>${esc(q.opts[oi])}</span></button>`;
           }).join("")}
         </div>
-        ${reveal ? `<div class="explain"><b class="${it.chosen === 0 ? "ok" : "no"}">${it.chosen === 0 ? "✓ Correct" : "✗ Not quite"}</b> ${esc(q.exp)}</div>` : ""}
+        ${reveal ? `<div class="explain"><b class="${isRight(q, it.chosen) ? "ok" : "no"}">${isRight(q, it.chosen) ? "✓ Correct" : "✗ Not quite"}</b> ${esc(q.exp)}</div>` : ""}
         <div class="row mt">
           <button class="btn" id="prev" ${ss.idx === 0 ? "disabled" : ""}>← Back</button>
           <span class="spacer"></span>
+          ${isMulti(q) && !exam && !answered ? `<button class="btn primary" id="check" ${(it.pick || []).length === q.k ? "" : "disabled"}>Check answer</button>` : ""}
           ${ss.idx < ss.items.length - 1
             ? `<button class="btn primary" id="next" ${!exam && !answered ? "disabled" : ""}>Next →</button>`
             : `<button class="btn accent" id="finish" ${!exam && !answered ? "disabled" : ""}>${exam ? "Submit exam" : "Finish"}</button>`}
         </div>
-        <div class="kbd-hint">Keys: A–D or 1–4 to answer · Enter / → next · ← back${exam ? " · F flag" : ""}</div>
+        <div class="kbd-hint">Keys: ${isMulti(q) ? "A–E or 1–5 to select" : "A–D or 1–4 to answer"} · Enter / → next · ← back${exam ? " · F flag" : ""}</div>
       </div>
       ${exam ? `<div class="card mt"><b>Questions</b> <span class="muted">(highlighted = answered, red dot = flagged)</span>
         <div class="qnav">${ss.items.map((x, i) => `<button data-go="${i}" class="${x.chosen !== null ? "ans" : ""} ${x.flag ? "flag" : ""} ${i === ss.idx ? "cur" : ""}">${i + 1}</button>`).join("")}</div></div>` : ""}
@@ -481,11 +492,28 @@
     const choose = oi => {
       if (reveal) return;
       if (!exam && answered) return;
+      if (isMulti(q)) {
+        // Toggle the option; in an exam the answer counts once exactly k options are selected.
+        const pick = (it.pick || (Array.isArray(it.chosen) ? it.chosen.slice() : [])).filter(x => x !== oi);
+        if (pick.length === (it.pick || it.chosen || []).length) { if (pick.length >= q.k) return; pick.push(oi); }
+        it.pick = pick.sort((a, b) => a - b);
+        if (exam) it.chosen = it.pick.length === q.k ? it.pick.slice() : null;
+        save(true); views.quiz(); return;
+      }
       accrue();
       it.chosen = oi;
       if (!exam) record(it.id, oi === 0, it.t);
       save(); views.quiz();
     };
+    const check = () => {
+      if (!isMulti(q) || exam || answered || (it.pick || []).length !== q.k) return;
+      accrue();
+      it.chosen = it.pick.slice();
+      record(it.id, isRight(q, it.chosen), it.t);
+      save(); views.quiz();
+    };
+    const chk = document.getElementById("check");
+    if (chk) chk.onclick = check;
     $app.querySelectorAll(".opt").forEach(b => b.onclick = () => choose(+b.dataset.o));
     const prev = document.getElementById("prev"), next = document.getElementById("next"), fin = document.getElementById("finish");
     prev.onclick = () => go(ss.idx - 1);
@@ -508,8 +536,9 @@
     keyHandler = e => {
       if (e.target.tagName === "INPUT") return;
       const k = e.key.toUpperCase();
-      let n = "ABCD".indexOf(k); if (n < 0) n = "1234".indexOf(k);
+      let n = LETTERS.indexOf(k); if (n < 0) n = "12345".indexOf(k);
       if (n >= 0 && n < it.order.length && k.length === 1) { choose(it.order[n]); return; }
+      if (e.key === "Enter" && isMulti(q) && !exam && !answered) { check(); return; }
       if ((e.key === "Enter" || e.key === "ArrowRight") && (exam || answered)) {
         if (ss.idx < ss.items.length - 1) go(ss.idx + 1); else if (!exam) finish();
       }
@@ -541,8 +570,8 @@
     ss.done = true;
     ss.secs = Math.round((Date.now() - ss.started) / 1000);
     if (ss.mode === "exam") {
-      ss.items.forEach(it => record(it.id, it.chosen === 0, it.t));
-      const score = ss.items.filter(it => it.chosen === 0).length;
+      ss.items.forEach(it => record(it.id, isRight(QMAP[it.id], it.chosen), it.t));
+      const score = ss.items.filter(it => isRight(QMAP[it.id], it.chosen)).length;
       S.exams.push({ date: Date.now(), score, total: ss.items.length, secs: ss.secs, track: "fsc", full: ss.items.length === EX().questions });
     }
     save();
@@ -556,15 +585,16 @@
     const exam = ss.mode === "exam";
     accrue();
     const items = exam ? ss.items : ss.items.filter(it => it.chosen !== null);
-    const score = items.filter(it => it.chosen === 0).length;
+    const ok = it => isRight(QMAP[it.id], it.chosen);
+    const score = items.filter(ok).length;
     const p = pct(score, items.length);
     const byTopic = {};
     for (const it of items) {
       const t = QMAP[it.id].topic;
       byTopic[t] = byTopic[t] || { n: 0, c: 0 };
-      byTopic[t].n++; if (it.chosen === 0) byTopic[t].c++;
+      byTopic[t].n++; if (ok(it)) byTopic[t].c++;
     }
-    const wrong = items.filter(it => it.chosen !== 0);
+    const wrong = items.filter(it => !ok(it));
     $app.innerHTML = `
       <h1>${esc(ss.title)}: results</h1>
       <div class="card">
@@ -589,12 +619,11 @@
       <h2>Review</h2>
       ${items.map((it, i) => {
         const q = QMAP[it.id];
-        const ok = it.chosen === 0;
         return `<div class="card mt">
-          <div class="tag">${i + 1}. ${TOPIC[q.topic].icon} ${esc(TOPIC[q.topic].name)} ${ok ? "· ✓" : "· ✗"}</div>
-          <div class="q-text" style="font-size:16px">${esc(q.text)}</div>
+          <div class="tag">${i + 1}. ${TOPIC[q.topic].icon} ${esc(TOPIC[q.topic].name)} ${ok(it) ? "· ✓" : "· ✗"}</div>
+          <div class="q-text" style="font-size:16px">${esc(q.text)}${isMulti(q) ? ` <span class="choose">Choose ${q.k} answers.</span>` : ""}</div>
           ${it.order.map((oi, pos) => {
-            const cls = oi === 0 ? "right" : oi === it.chosen ? "wrong" : "";
+            const cls = oi < q.k ? "right" : picked(q, it, oi) ? "wrong" : "";
             return `<button class="opt ${cls}" disabled><span class="k">${LETTERS[pos]}</span><span>${esc(q.opts[oi])}</span></button>`;
           }).join("")}
           ${it.chosen === null ? `<p class="muted">Not answered.</p>` : ""}
@@ -697,7 +726,7 @@
         <div class="card stat"><b>${e.questions}</b><span>multiple-choice / multiple-select questions</span></div>
         <div class="card stat"><b>${e.minutes} min</b><span>about ${fmtTime(e.minutes * 60 / e.questions)} per question</span></div>
         <div class="card stat"><b>${Math.round(e.pass * 100)}%</b><span>reported passing score</span></div>
-        <div class="card stat"><b>${pool.length}</b><span>questions in this bank (${kinds.s} scenarios, ${kinds.r} concepts)</span></div>
+        <div class="card stat"><b>${pool.length}</b><span>questions in this bank (${kinds.s} scenarios, ${kinds.r} concepts, ${pool.filter(isMulti).length} \u201cChoose 2\u201d)</span></div>
       </div>
       <h2>Exam domains</h2>
       <div class="card notes"><table>
@@ -708,6 +737,7 @@
       <div class="card notes"><ul>
         <li>The exam is written for <b>implementation consultants</b>: most questions describe a bank, wealth firm or insurer and ask what you'd recommend, configure or do next. Learn <i>why</i> each feature exists, not just where the setting is.</li>
         <li>Your Admin certification covers the platform basics (sharing, flows, record types, reports). Focus your time on the <b>FSC data model</b> (households, relationships, financial accounts, rollups) and <b>Compliant Data Sharing</b>: they're behind a large share of the Define/Design questions.</li>
+        <li>Expect some <b>multiple-select</b> questions ("Choose 2 answers"). You need both right to score, so rule out the clear wrong answers first. This bank includes the same format.</li>
         <li>Prefer <b>out-of-the-box FSC features</b> over custom builds in your answers, unless the scenario rules them out.</li>
         <li>Pair this site with the official Trailhead/Partner Learning Camp trails for the exam, and click through FSC in a Trailhead playground or partner demo org.</li>
       </ul></div>
